@@ -88,22 +88,24 @@ func sliceIncludes(slice []string, match string) bool {
 	return false
 }
 
-func printUsage() {
+func printUsage(_ []string) error {
 	fmt.Printf("Lunchy %s, the friendly launchctl wrapper\n", lunchyVersion)
 	fmt.Println("Usage: lunchy [start|stop|restart|list|status|install|show|edit|remove|scan] [options]")
+	return nil
 }
 
-func printList() {
+func printList(_ []string) error {
 	for _, file := range getPlists() {
 		fmt.Println(file)
 	}
+	return nil
 }
 
-func printStatus(args []string) {
+func printStatus(args []string) error {
 	out, err := exec.Command("launchctl", "list").Output()
 
 	if err != nil {
-		fatal("failed to get process list")
+		return fmt.Errorf("failed to get process list: %s", err)
 	}
 
 	pattern := ""
@@ -131,140 +133,116 @@ func printStatus(args []string) {
 			}
 		}
 	}
+
+	return nil
 }
 
-func exitWithInvalidArgs(args []string, msg string) {
+func assertValidArgs(args []string, msg string) {
 	if len(args) < 3 {
-		fmt.Println(msg)
+		fmt.Fprintln(os.Stderr, msg)
 		os.Exit(1)
 	}
 }
 
-func startDaemons(args []string) {
-	// Check if name pattern is not given and try profiles
-	if len(args) == 2 {
-		if profileExists() {
-			startProfile()
-			return
+func withProfile(f func(string) error) func(args []string) error {
+	return func(args []string) error {
+		// Check if name pattern is not given and try profiles
+		if len(args) == 2 {
+			p, err := readProfile()
+			if err != nil {
+				return err
+			}
+			if p == nil {
+				return fmt.Errorf("name required")
+			}
+			return plistsAction(p, f)
 		}
-		exitWithInvalidArgs(args, "name required")
-	}
 
-	name := args[2]
+		name := args[2]
 
-	for _, plist := range getPlists() {
-		if strings.Index(plist, name) != -1 {
-			startDaemon(plist)
+		for _, plist := range getPlists() {
+			if strings.Index(plist, name) != -1 {
+				f(plist)
+			}
 		}
+
+		return nil
 	}
 }
 
-func startDaemon(name string) {
+func runLaunchCtl(verb string, name string) error {
 	path := pPath(name)
-	_, err := exec.Command("launchctl", "load", path).Output()
+	_, err := exec.Command("launchctl", verb, path).Output()
 
 	if err != nil {
-		fmt.Println("failed to start", name)
-		return
+		return fmt.Errorf("failed to %s %s: %s", verb, name, err)
 	}
 
-	fmt.Println("started", name)
+	fmt.Println(verb, name)
+
+	return nil
 }
 
-func stopDaemons(args []string) {
-	// Check if name pattern is not given and try profiles
-	if len(args) == 2 {
-		if profileExists() {
-			stopProfile()
-			return
-		}
-		exitWithInvalidArgs(args, "name required")
-	}
+func startDaemon(name string) error {
+	return runLaunchCtl("load", name)
+}
+
+func stopDaemon(name string) error {
+	return runLaunchCtl("unload", name)
+}
+
+func stopStartDaemon(name string) error {
+	stopDaemon(name) // Ignore errors on stop.
+	return startDaemon(name)
+}
+
+func showPlist(args []string) error {
+	assertValidArgs(args, "name required")
 
 	name := args[2]
 
 	for _, plist := range getPlists() {
 		if strings.Index(plist, name) != -1 {
-			stopDaemon(plist)
+			return printPlistContent(plist)
 		}
 	}
+
+	return fmt.Errorf("not found: %s", name)
 }
 
-func stopDaemon(name string) {
-	path := pPath(name)
-	_, err := exec.Command("launchctl", "unload", path).Output()
-
-	if err != nil {
-		fmt.Println("failed to stop", name)
-		return
-	}
-
-	fmt.Println("stopped", name)
-}
-
-func restartDaemons(args []string) {
-	// Check if name pattern is not given and try profiles
-	if len(args) == 2 {
-		if profileExists() {
-			restartProfile()
-			return
-		}
-		exitWithInvalidArgs(args, "name required")
-	}
-
-	name := args[2]
-
-	for _, plist := range getPlists() {
-		if strings.Index(plist, name) != -1 {
-			stopDaemon(plist)
-			startDaemon(plist)
-		}
-	}
-}
-
-func showPlist(args []string) {
-	exitWithInvalidArgs(args, "name required")
-
-	name := args[2]
-
-	for _, plist := range getPlists() {
-		if strings.Index(plist, name) != -1 {
-			printPlistContent(plist)
-			return
-		}
-	}
-}
-
-func printPlistContent(name string) {
+func printPlistContent(name string) error {
 	path := pPath(name)
 	contents, err := ioutil.ReadFile(path)
 
 	if err != nil {
-		fatal("unable to read plist")
+		return fmt.Errorf("unable to read plist: %s", err)
 	}
 
 	fmt.Printf(string(contents))
+
+	return nil
 }
 
-func editPlist(args []string) {
-	exitWithInvalidArgs(args, "name required")
+func editPlist(args []string) error {
+	assertValidArgs(args, "name required")
 
 	name := args[2]
 
 	for _, plist := range getPlists() {
 		if strings.Index(plist, name) != -1 {
-			editPlistContent(plist)
-			return
+			return editPlistContent(plist)
 		}
 	}
+
+	return fmt.Errorf("not found: %s", name)
 }
 
-func editPlistContent(name string) {
+func editPlistContent(name string) error {
 	path := pPath(name)
 	editor := os.Getenv("EDITOR")
 
 	if len(editor) == 0 {
-		fatal("EDITOR environment variable is not set")
+		return fmt.Errorf("EDITOR environment variable is not set")
 	}
 
 	cmd := exec.Command(editor, path)
@@ -274,33 +252,36 @@ func editPlistContent(name string) {
 
 	cmd.Start()
 	cmd.Wait()
+
+	return nil
 }
 
-func installPlist(args []string) {
-	exitWithInvalidArgs(args, "path required")
+func installPlist(args []string) error {
+	assertValidArgs(args, "path required")
 
 	path := args[2]
 
 	if !fileExists(path) {
-		fatal("source file does not exist")
+		return fmt.Errorf("source file \"%s\" does not exist", path)
 	}
 
 	info, _ := os.Stat(path)
 	newPath := filepath.Join(launchAgentsPath, info.Name())
 
 	if fileExists(newPath) && os.Remove(newPath) != nil {
-		fatal("unable to delete existing plist")
+		return fmt.Errorf("unable to delete existing plist")
 	}
 
 	if fileCopy(path, newPath) != nil {
-		fatal("failed to copy file")
+		return fmt.Errorf("failed to copy file")
 	}
 
 	fmt.Println(path, "installed to", launchAgentsPath)
+	return nil
 }
 
-func removePlist(args []string) {
-	exitWithInvalidArgs(args, "name required")
+func removePlist(args []string) error {
+	assertValidArgs(args, "name required")
 
 	name := args[2]
 
@@ -315,9 +296,11 @@ func removePlist(args []string) {
 			}
 		}
 	}
+
+	return nil
 }
 
-func scanPath(args []string) {
+func scanPath(args []string) error {
 	path := launchAgentsPath
 
 	if len(args) >= 3 {
@@ -332,32 +315,26 @@ func scanPath(args []string) {
 	for _, f := range findPlists(path) {
 		fmt.Println(f)
 	}
-}
 
-// Get full path to lunchy profile file
-func profilePath() string {
-	dir, err := os.Getwd()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(dir, ".lunchy")
-}
-
-// Check if profile file exists
-func profileExists() bool {
-	return fileExists(profilePath())
+	return nil
 }
 
 // Get daemon names specified in lunchy profile
-func readProfile() []string {
-	path := profilePath()
-	if path == "" {
-		return nil
+func readProfile() ([]string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+	path := filepath.Join(dir, ".lunchy")
+
+	if !fileExists(path) {
+		return nil, nil
 	}
 
+	fmt.Println("Using daemons in profile:", path)
 	buff, err := ioutil.ReadFile(path)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 
 	result := []string{}
@@ -374,42 +351,23 @@ func readProfile() []string {
 		result = append(result, line)
 	}
 
-	return result
+	return result, nil
 }
 
-func plistsAction(names []string, action string) {
+func plistsAction(names []string, f func(string) error) error {
 	plists := getPlists()
 
 	for _, name := range names {
 		for _, plist := range plists {
 			if strings.Index(plist, name) != -1 {
-				switch action {
-				case "start":
-					startDaemon(plist)
-				case "stop":
-					stopDaemon(plist)
-				case "restart":
-					stopDaemon(plist)
-					startDaemon(plist)
+				if err := f(plist); err != nil {
+					fmt.Println(err)
 				}
 			}
 		}
 	}
-}
 
-func startProfile() {
-	fmt.Println("Starting daemons in profile:", profilePath())
-	plistsAction(readProfile(), "start")
-}
-
-func stopProfile() {
-	fmt.Println("Stopping daemons in profile:", profilePath())
-	plistsAction(readProfile(), "stop")
-}
-
-func restartProfile() {
-	fmt.Println("Restarting daemons in profile:", profilePath())
-	plistsAction(readProfile(), "restart")
+	return nil
 }
 
 func fatal(message string) {
@@ -417,39 +375,38 @@ func fatal(message string) {
 	os.Exit(1)
 }
 
-func wrap(f func()) func([]string) {
-	return func(_ []string) {
-		f()
-	}
-}
-
 func main() {
 	if len(os.Args) == 1 {
-		printUsage()
+		printUsage(os.Args)
 		os.Exit(1)
 	}
 
-	m := map[string](func([]string)){
+	f, ok := map[string](func([]string) error){
 		"add":     installPlist,
 		"edit":    editPlist,
-		"help":    wrap(printUsage),
+		"help":    printUsage,
 		"install": installPlist,
-		"list":    wrap(printList),
-		"ls":      wrap(printList),
+		"list":    printList,
+		"ls":      printList,
 		"ps":      printStatus,
 		"remove":  removePlist,
-		"restart": restartDaemons,
+		"restart": withProfile(stopStartDaemon),
 		"rm":      removePlist,
 		"scan":    scanPath,
 		"show":    showPlist,
-		"start":   startDaemons,
+		"start":   withProfile(startDaemon),
 		"status":  printStatus,
-		"stop":    stopDaemons,
+		"stop":    withProfile(stopDaemon),
+	}[os.Args[1]]
+
+	if !ok {
+		printUsage(os.Args)
+		os.Exit(1)
 	}
-	if f, ok := m[os.Args[1]]; ok {
-		f(os.Args)
-	} else {
-		printUsage()
+
+	err := f(os.Args)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(1)
 	}
 }
