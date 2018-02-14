@@ -6,13 +6,21 @@ import (
 	"io/ioutil"
 	"os"
 	"os/exec"
-	filepath "path"
+	"path/filepath"
 	"strings"
 )
 
 const (
-	LUNCHY_VERSION = "0.2.1"
+	lunchyVersion = "0.2.1"
 )
+
+var (
+	launchAgentsPath = filepath.Join(os.Getenv("HOME"), "Library", "LaunchAgents")
+)
+
+func pPath(n string) string {
+	return filepath.Join(launchAgentsPath, n+".plist")
+}
 
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
@@ -43,7 +51,7 @@ func fileCopy(src string, dst string) error {
 func findPlists(path string) []string {
 	output, err := exec.Command("find", "-L", path, "-name", "*.plist", "-type", "f").Output()
 	if err != nil {
-		return []string{}
+		return nil
 	}
 
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
@@ -57,10 +65,7 @@ func findPlists(path string) []string {
 }
 
 func getPlists() []string {
-	path := fmt.Sprintf("%s/Library/LaunchAgents", os.Getenv("HOME"))
-	files := findPlists(path)
-
-	return files
+	return findPlists(launchAgentsPath)
 }
 
 func getPlist(name string) string {
@@ -84,7 +89,7 @@ func sliceIncludes(slice []string, match string) bool {
 }
 
 func printUsage() {
-	fmt.Printf("Lunchy %s, the friendly launchctl wrapper\n", LUNCHY_VERSION)
+	fmt.Printf("Lunchy %s, the friendly launchctl wrapper\n", lunchyVersion)
 	fmt.Println("Usage: lunchy [start|stop|restart|list|status|install|show|edit|remove|scan] [options]")
 }
 
@@ -112,17 +117,17 @@ func printStatus(args []string) {
 
 	for _, line := range lines {
 		chunks := strings.Split(line, "\t")
-		clean_line := strings.Replace(line, "\t", " ", -1)
+		cleanLine := strings.Replace(line, "\t", " ", -1)
 
 		if len(pattern) > 0 {
 			if strings.Index(chunks[2], pattern) != -1 {
 				if sliceIncludes(installed, chunks[2]) {
-					fmt.Println(clean_line)
+					fmt.Println(cleanLine)
 				}
 			}
 		} else {
 			if sliceIncludes(installed, chunks[2]) {
-				fmt.Println(clean_line)
+				fmt.Println(cleanLine)
 			}
 		}
 	}
@@ -141,9 +146,8 @@ func startDaemons(args []string) {
 		if profileExists() {
 			startProfile()
 			return
-		} else {
-			exitWithInvalidArgs(args, "name required")
 		}
+		exitWithInvalidArgs(args, "name required")
 	}
 
 	name := args[2]
@@ -156,7 +160,7 @@ func startDaemons(args []string) {
 }
 
 func startDaemon(name string) {
-	path := fmt.Sprintf("%s/Library/LaunchAgents/%s.plist", os.Getenv("HOME"), name)
+	path := pPath(name)
 	_, err := exec.Command("launchctl", "load", path).Output()
 
 	if err != nil {
@@ -173,9 +177,8 @@ func stopDaemons(args []string) {
 		if profileExists() {
 			stopProfile()
 			return
-		} else {
-			exitWithInvalidArgs(args, "name required")
 		}
+		exitWithInvalidArgs(args, "name required")
 	}
 
 	name := args[2]
@@ -188,7 +191,7 @@ func stopDaemons(args []string) {
 }
 
 func stopDaemon(name string) {
-	path := fmt.Sprintf("%s/Library/LaunchAgents/%s.plist", os.Getenv("HOME"), name)
+	path := pPath(name)
 	_, err := exec.Command("launchctl", "unload", path).Output()
 
 	if err != nil {
@@ -205,9 +208,8 @@ func restartDaemons(args []string) {
 		if profileExists() {
 			restartProfile()
 			return
-		} else {
-			exitWithInvalidArgs(args, "name required")
 		}
+		exitWithInvalidArgs(args, "name required")
 	}
 
 	name := args[2]
@@ -234,7 +236,7 @@ func showPlist(args []string) {
 }
 
 func printPlistContent(name string) {
-	path := fmt.Sprintf("%s/Library/LaunchAgents/%s.plist", os.Getenv("HOME"), name)
+	path := pPath(name)
 	contents, err := ioutil.ReadFile(path)
 
 	if err != nil {
@@ -258,7 +260,7 @@ func editPlist(args []string) {
 }
 
 func editPlistContent(name string) {
-	path := fmt.Sprintf("%s/Library/LaunchAgents/%s.plist", os.Getenv("HOME"), name)
+	path := pPath(name)
 	editor := os.Getenv("EDITOR")
 
 	if len(editor) == 0 {
@@ -284,29 +286,27 @@ func installPlist(args []string) {
 	}
 
 	info, _ := os.Stat(path)
-	base_path := fmt.Sprintf("%s/%s", os.Getenv("HOME"), "Library/LaunchAgents")
-	new_path := fmt.Sprintf("%s/%s", base_path, info.Name())
+	newPath := filepath.Join(launchAgentsPath, info.Name())
 
-	if fileExists(new_path) && os.Remove(new_path) != nil {
+	if fileExists(newPath) && os.Remove(newPath) != nil {
 		fatal("unable to delete existing plist")
 	}
 
-	if fileCopy(path, new_path) != nil {
+	if fileCopy(path, newPath) != nil {
 		fatal("failed to copy file")
 	}
 
-	fmt.Println(path, "installed to", base_path)
+	fmt.Println(path, "installed to", launchAgentsPath)
 }
 
 func removePlist(args []string) {
 	exitWithInvalidArgs(args, "name required")
 
 	name := args[2]
-	base_path := fmt.Sprintf("%s/%s", os.Getenv("HOME"), "Library/LaunchAgents")
 
 	for _, plist := range getPlists() {
 		if strings.Index(plist, name) != -1 {
-			path := fmt.Sprintf("%s/%s.plist", base_path, plist)
+			path := pPath(plist)
 
 			if os.Remove(path) == nil {
 				fmt.Println("removed", path)
@@ -318,7 +318,7 @@ func removePlist(args []string) {
 }
 
 func scanPath(args []string) {
-	path := fmt.Sprintf("%s/%s", os.Getenv("HOME"), "Library/LaunchAgents")
+	path := launchAgentsPath
 
 	if len(args) >= 3 {
 		path = args[2]
@@ -340,7 +340,7 @@ func profilePath() string {
 	if err != nil {
 		return ""
 	}
-	return dir + "/.lunchy"
+	return filepath.Join(dir, ".lunchy")
 }
 
 // Check if profile file exists
@@ -352,12 +352,12 @@ func profileExists() bool {
 func readProfile() []string {
 	path := profilePath()
 	if path == "" {
-		return []string{}
+		return nil
 	}
 
 	buff, err := ioutil.ReadFile(path)
 	if err != nil {
-		return []string{}
+		return nil
 	}
 
 	result := []string{}
@@ -367,7 +367,7 @@ func readProfile() []string {
 		line := strings.TrimSpace(l)
 
 		// Skip comments (starts with #)
-		if line[0] == 35 {
+		if line[0] == '#' {
 			continue
 		}
 
@@ -413,54 +413,43 @@ func restartProfile() {
 }
 
 func fatal(message string) {
-	fmt.Println(message)
+	fmt.Fprintln(os.Stderr, message)
 	os.Exit(1)
 }
 
-func main() {
-	args := os.Args
+func wrap(f func()) func([]string) {
+	return func(_ []string) {
+		f()
+	}
+}
 
-	if len(args) == 1 {
+func main() {
+	if len(os.Args) == 1 {
 		printUsage()
 		os.Exit(1)
 	}
 
-	switch args[1] {
-	default:
+	m := map[string](func([]string)){
+		"add":     installPlist,
+		"edit":    editPlist,
+		"help":    wrap(printUsage),
+		"install": installPlist,
+		"list":    wrap(printList),
+		"ls":      wrap(printList),
+		"ps":      printStatus,
+		"remove":  removePlist,
+		"restart": restartDaemons,
+		"rm":      removePlist,
+		"scan":    scanPath,
+		"show":    showPlist,
+		"start":   startDaemons,
+		"status":  printStatus,
+		"stop":    stopDaemons,
+	}
+	if f, ok := m[os.Args[1]]; ok {
+		f(os.Args)
+	} else {
 		printUsage()
 		os.Exit(1)
-	case "help":
-		printUsage()
-		return
-	case "list", "ls":
-		printList()
-		return
-	case "status", "ps":
-		printStatus(args)
-		return
-	case "start":
-		startDaemons(args)
-		return
-	case "stop":
-		stopDaemons(args)
-		return
-	case "restart":
-		restartDaemons(args)
-		return
-	case "show":
-		showPlist(args)
-		return
-	case "edit":
-		editPlist(args)
-		return
-	case "install", "add":
-		installPlist(args)
-		return
-	case "remove", "rm":
-		removePlist(args)
-		return
-	case "scan":
-		scanPath(args)
-		return
 	}
 }
