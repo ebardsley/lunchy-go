@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -55,11 +56,13 @@ func findPlists(path string) []string {
 	}
 
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	plists := []string{}
+	plists := make([]string, 0, len(lines))
 
 	for _, line := range lines {
 		plists = append(plists, strings.Replace(filepath.Base(line), ".plist", "", 1))
 	}
+
+	sort.Sort(sort.StringSlice(plists))
 
 	return plists
 }
