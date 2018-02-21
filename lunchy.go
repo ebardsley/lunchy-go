@@ -16,6 +16,22 @@ const (
 )
 
 var (
+	commandMap = map[string](func([]string) error){
+		"add":     installPlist,
+		"edit":    withFirstMatch(editPlist),
+		"install": installPlist,
+		"list":    printList,
+		"ls":      printList,
+		"ps":      printStatus,
+		"remove":  removePlist,
+		"restart": withProfile(stopStartDaemon),
+		"rm":      removePlist,
+		"scan":    scanPath,
+		"show":    withFirstMatch(showPlist),
+		"start":   withProfile(startDaemon),
+		"status":  printStatus,
+		"stop":    withProfile(stopDaemon),
+	}
 	launchAgentsPath = filepath.Join(os.Getenv("HOME"), "Library", "LaunchAgents")
 )
 
@@ -82,8 +98,14 @@ func sliceIncludes(slice []string, match string) bool {
 }
 
 func printUsage(_ []string) error {
+	cmds := make([]string, 0, len(commandMap))
+	for v := range commandMap {
+		cmds = append(cmds, v)
+	}
+	sort.Sort(sort.StringSlice(cmds))
+
 	fmt.Printf("Lunchy %s, the friendly launchctl wrapper\n", lunchyVersion)
-	fmt.Println("Usage: lunchy [start|stop|restart|list|status|install|show|edit|remove|scan] [options]")
+	fmt.Printf("Usage: lunchy [%s] [options]\n", strings.Join(cmds, "|"))
 	return nil
 }
 
@@ -96,13 +118,11 @@ func printList(_ []string) error {
 
 func printStatus(args []string) error {
 	out, err := exec.Command("launchctl", "list").Output()
-
 	if err != nil {
 		return fmt.Errorf("failed to get process list: %s", err)
 	}
 
 	pattern := ""
-
 	if len(args) == 3 {
 		pattern = args[2]
 	}
@@ -356,24 +376,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	f, ok := map[string](func([]string) error){
-		"add":     installPlist,
-		"edit":    withFirstMatch(editPlist),
-		"help":    printUsage,
-		"install": installPlist,
-		"list":    printList,
-		"ls":      printList,
-		"ps":      printStatus,
-		"remove":  removePlist,
-		"restart": withProfile(stopStartDaemon),
-		"rm":      removePlist,
-		"scan":    scanPath,
-		"show":    withFirstMatch(showPlist),
-		"start":   withProfile(startDaemon),
-		"status":  printStatus,
-		"stop":    withProfile(stopDaemon),
-	}[os.Args[1]]
-
+	f, ok := commandMap[os.Args[1]]
 	if !ok {
 		printUsage(os.Args)
 		os.Exit(1)
