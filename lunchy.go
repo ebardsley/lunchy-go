@@ -68,16 +68,6 @@ func getPlists() []string {
 	return findPlists(launchAgentsPath)
 }
 
-func getPlist(name string) string {
-	for _, plist := range getPlists() {
-		if strings.Index(plist, name) != -1 {
-			return plist
-		}
-	}
-
-	return ""
-}
-
 func sliceIncludes(slice []string, match string) bool {
 	for _, val := range slice {
 		if val == match {
@@ -119,19 +109,19 @@ func printStatus(args []string) error {
 
 	for _, line := range lines {
 		chunks := strings.Split(line, "\t")
-		cleanLine := strings.Replace(line, "\t", " ", -1)
 
-		if len(pattern) > 0 {
-			if strings.Index(chunks[2], pattern) != -1 {
-				if sliceIncludes(installed, chunks[2]) {
-					fmt.Println(cleanLine)
-				}
-			}
-		} else {
-			if sliceIncludes(installed, chunks[2]) {
-				fmt.Println(cleanLine)
-			}
+		// Only show services from the user's LaunchAgents.
+		if !sliceIncludes(installed, chunks[2]) {
+			continue
 		}
+
+		// Filter on service name, if given.
+		if len(pattern) > 0 && !strings.Contains(chunks[2], pattern) {
+			continue
+		}
+
+		// Replace tabs with spaces to condense output.
+		fmt.Println(strings.Replace(line, "\t", " ", -1))
 	}
 
 	return nil
@@ -161,7 +151,7 @@ func withProfile(f func(string) error) func(args []string) error {
 		name := args[2]
 
 		for _, plist := range getPlists() {
-			if strings.Index(plist, name) != -1 {
+			if strings.Contains(plist, name) {
 				f(plist)
 			}
 		}
@@ -196,21 +186,22 @@ func stopStartDaemon(name string) error {
 	return startDaemon(name)
 }
 
-func showPlist(args []string) error {
-	assertValidArgs(args, "name required")
+func withFirstMatch(f func(string) error) func([]string) error {
+	return func(args []string) error {
+		assertValidArgs(args, "name required")
+		name := args[2]
 
-	name := args[2]
-
-	for _, plist := range getPlists() {
-		if strings.Index(plist, name) != -1 {
-			return printPlistContent(plist)
+		for _, plist := range getPlists() {
+			if strings.Contains(plist, name) {
+				return f(plist)
+			}
 		}
-	}
 
-	return fmt.Errorf("not found: %s", name)
+		return fmt.Errorf("not found: %s", name)
+	}
 }
 
-func printPlistContent(name string) error {
+func showPlist(name string) error {
 	path := pPath(name)
 	contents, err := ioutil.ReadFile(path)
 
@@ -223,21 +214,7 @@ func printPlistContent(name string) error {
 	return nil
 }
 
-func editPlist(args []string) error {
-	assertValidArgs(args, "name required")
-
-	name := args[2]
-
-	for _, plist := range getPlists() {
-		if strings.Index(plist, name) != -1 {
-			return editPlistContent(plist)
-		}
-	}
-
-	return fmt.Errorf("not found: %s", name)
-}
-
-func editPlistContent(name string) error {
+func editPlist(name string) error {
 	path := pPath(name)
 	editor := os.Getenv("EDITOR")
 
@@ -286,7 +263,7 @@ func removePlist(args []string) error {
 	name := args[2]
 
 	for _, plist := range getPlists() {
-		if strings.Index(plist, name) != -1 {
+		if strings.Contains(plist, name) {
 			path := pPath(plist)
 
 			if os.Remove(path) == nil {
@@ -337,8 +314,8 @@ func readProfile() ([]string, error) {
 		return nil, err
 	}
 
-	result := []string{}
 	lines := strings.Split(strings.TrimSpace(string(buff)), "\n")
+	result := make([]string, 0, len(lines))
 
 	for _, l := range lines {
 		line := strings.TrimSpace(l)
@@ -359,7 +336,7 @@ func plistsAction(names []string, f func(string) error) error {
 
 	for _, name := range names {
 		for _, plist := range plists {
-			if strings.Index(plist, name) != -1 {
+			if strings.Contains(plist, name) {
 				if err := f(plist); err != nil {
 					fmt.Println(err)
 				}
@@ -370,11 +347,6 @@ func plistsAction(names []string, f func(string) error) error {
 	return nil
 }
 
-func fatal(message string) {
-	fmt.Fprintln(os.Stderr, message)
-	os.Exit(1)
-}
-
 func main() {
 	if len(os.Args) == 1 {
 		printUsage(os.Args)
@@ -383,7 +355,7 @@ func main() {
 
 	f, ok := map[string](func([]string) error){
 		"add":     installPlist,
-		"edit":    editPlist,
+		"edit":    withFirstMatch(editPlist),
 		"help":    printUsage,
 		"install": installPlist,
 		"list":    printList,
@@ -393,7 +365,7 @@ func main() {
 		"restart": withProfile(stopStartDaemon),
 		"rm":      removePlist,
 		"scan":    scanPath,
-		"show":    showPlist,
+		"show":    withFirstMatch(showPlist),
 		"start":   withProfile(startDaemon),
 		"status":  printStatus,
 		"stop":    withProfile(stopDaemon),
